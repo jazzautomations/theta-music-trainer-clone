@@ -2,80 +2,55 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const UPSTREAM = "https://trainer.thetamusic.com";
 
-// Paths that should be proxied as-is (binary assets, no modification)
-const BINARY_TYPES = [
-  ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
-  ".woff", ".woff2", ".ttf", ".eot", ".mp3", ".wav", ".ogg", ".webm",
-  ".webp", ".pdf", ".zip",
-];
+// CSS injected into HTML to hide login wall, paywall, cookie banners.
+// Pure CSS — no JS, no DOM manipulation, no infinite loops.
+const CLEANUP_CSS = `
+<style id="__theta_cleanup">
+/* Hide login/signup/auth blocks */
+.block-user-login, .block-user, .block-user-menu,
+.login-block, .auth-modal, .user-login-form,
+#block-userlogin, #block-userlogin-2,
+.region-sidebar-first .block-user,
+.region-sidebar-second .block-user,
+[class*="login-modal"], [class*="signup-modal"],
+[class*="auth-modal"], [class*="register-form"],
+[id*="login-modal"], [id*="signup-modal"] {
+  display: none !important;
+}
 
-// Cleanup script injected into HTML to remove login wall, paywall, sign-in prompts
-const CLEANUP_SCRIPT = `
-<script>
-(function() {
-  "use strict";
-  // Auto-dismiss login/signup modals, paywall, cookie banners
-  function cleanup() {
-    // Remove login/signup overlays
-    document.querySelectorAll(
-      '[class*="login"], [class*="signup"], [class*="sign-in"], [class*="modal"], ' +
-      '[class*="paywall"], [class*="subscribe"], [class*="upgrade"], [class*="locked"], ' +
-      '[id*="login"], [id*="signup"], [id*="modal"], [id*="paywall"], ' +
-      '.block-user, .block-user-login, .login-block, .auth-modal, ' +
-      '[class*="cookie"], [class*="gdpr"], [class*="consent"], ' +
-      '.region-sidebar-first .block-user, .region-sidebar-second .block-user'
-    ).forEach(function(el) {
-      // Only remove if it's a login/auth/cookie element, not game content
-      var t = (el.textContent || '').toLowerCase();
-      if (t.includes('sign in') || t.includes('log in') || t.includes('login') ||
-          t.includes('sign up') || t.includes('register') || t.includes('create account') ||
-          t.includes('subscribe') || t.includes('upgrade') || t.includes('unlock') ||
-          t.includes('cookie') || t.includes('gdpr') || t.includes('consent')) {
-        el.style.display = 'none';
-      }
-    });
+/* Hide paywall / subscribe / upgrade prompts */
+[class*="paywall"], [class*="subscribe"], [class*="upgrade"],
+[class*="locked-content"], [class*="premium-only"],
+[class*="membership"], [class*="pricing-table"],
+[id*="paywall"], [id*="subscribe"] {
+  display: none !important;
+}
 
-    // Auto-click "Play as guest" / "Skip" / "Continue as guest" buttons
-    document.querySelectorAll('button, a').forEach(function(el) {
-      var t = (el.textContent || '').trim().toLowerCase();
-      if (t === 'play as guest' || t === 'continue as guest' || t === 'guest' ||
-          t === 'skip' || t === 'continue' || t === 'no thanks' || t === 'maybe later' ||
-          t === 'close' || t === 'dismiss' || t === 'got it') {
-        el.click();
-      }
-    });
-  }
+/* Hide cookie/GDPR banners */
+[class*="cookie"], [class*="gdpr"], [class*="consent"],
+[class*="privacy-banner"], #cookie-banner, #gdpr-banner {
+  display: none !important;
+}
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', cleanup);
-  } else {
-    cleanup();
-  }
+/* Hide "sign in to play" overlays */
+.game-login-overlay, .game-locked, .locked-overlay,
+[class*="game-login"], [class*="game-locked"] {
+  display: none !important;
+}
 
-  // Run periodically for lazy-loaded modals
-  var runs = 0;
-  var interval = setInterval(function() {
-    cleanup();
-    runs++;
-    if (runs > 20) clearInterval(interval);
-  }, 500);
-
-  // MutationObserver for new modals
-  var observer = new MutationObserver(function() { cleanup(); });
-  function startObs() {
-    if (!document.body) { setTimeout(startObs, 10); return; }
-    observer.observe(document.body, { childList: true, subtree: true });
-  }
-  startObs();
-})();
-</script>
+/* Make sure game area is visible */
+#gameArea, #gameSVG, #gameSVG2, .game-content, .game-canvas {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+</style>
 `;
 
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   const url = `${UPSTREAM}${pathname}${search}`;
 
-  // Build fetch options — forward method, headers, body
   const fetchOpts: RequestInit = {
     method: req.method,
     headers: {
@@ -86,24 +61,20 @@ export async function middleware(req: NextRequest) {
     },
   };
 
-  // Forward body for POST/PUT
   if (req.method === "POST" || req.method === "PUT" || req.method === "PATCH") {
     fetchOpts.body = await req.text();
     const ct = req.headers.get("content-type");
     if (ct) (fetchOpts.headers as Record<string, string>)["Content-Type"] = ct;
   }
 
-  // Forward cookies
   const cookie = req.headers.get("cookie");
   if (cookie) (fetchOpts.headers as Record<string, string>)["Cookie"] = cookie;
 
   try {
     const upstream = await fetch(url, fetchOpts);
 
-    // Build response with same status + headers
     const headers = new Headers();
     upstream.headers.forEach((v, k) => {
-      // Skip hop-by-hop headers
       if (!["transfer-encoding", "connection", "content-encoding", "content-length"].includes(k.toLowerCase())) {
         headers.set(k, v);
       }
@@ -111,14 +82,13 @@ export async function middleware(req: NextRequest) {
 
     const contentType = upstream.headers.get("content-type") || "";
 
-    // If HTML, inject cleanup script
+    // HTML: inject CSS cleanup (no JS — no infinite loops)
     if (contentType.includes("text/html")) {
       let html = await upstream.text();
-      // Inject before </head>
       if (html.includes("</head>")) {
-        html = html.replace("</head>", CLEANUP_SCRIPT + "</head>");
+        html = html.replace("</head>", CLEANUP_CSS + "</head>");
       } else if (html.includes("</body>")) {
-        html = html.replace("</body>", CLEANUP_SCRIPT + "</body>");
+        html = html.replace("</body>", CLEANUP_CSS + "</body>");
       }
       headers.delete("content-length");
       return new NextResponse(html, {
@@ -144,7 +114,6 @@ export async function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
-    // Match everything except Next.js internals and static files we serve locally
-    "/((?!_next/static|_next/image|favicon.ico|logo.svg|robots.txt|cleanup.js).*)",
+    "/((?!_next/static|_next/image|favicon.ico|logo.svg|robots.txt).*)",
   ],
 };
