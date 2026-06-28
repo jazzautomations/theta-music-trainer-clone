@@ -2,11 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const UPSTREAM = "https://trainer.thetamusic.com";
 
-// CSS injected into HTML to hide login wall, paywall, cookie banners.
-// Pure CSS — no JS, no DOM manipulation, no infinite loops.
+// CSS to hide login wall, paywall, cookie banners (pure CSS, no loops)
 const CLEANUP_CSS = `
 <style id="__theta_cleanup">
-/* Hide login/signup/auth blocks */
 .block-user-login, .block-user, .block-user-menu,
 .login-block, .auth-modal, .user-login-form,
 #block-userlogin, #block-userlogin-2,
@@ -17,34 +15,84 @@ const CLEANUP_CSS = `
 [id*="login-modal"], [id*="signup-modal"] {
   display: none !important;
 }
-
-/* Hide paywall / subscribe / upgrade prompts */
 [class*="paywall"], [class*="subscribe"], [class*="upgrade"],
 [class*="locked-content"], [class*="premium-only"],
 [class*="membership"], [class*="pricing-table"],
 [id*="paywall"], [id*="subscribe"] {
   display: none !important;
 }
-
-/* Hide cookie/GDPR banners */
 [class*="cookie"], [class*="gdpr"], [class*="consent"],
 [class*="privacy-banner"], #cookie-banner, #gdpr-banner {
   display: none !important;
 }
-
-/* Hide "sign in to play" overlays */
 .game-login-overlay, .game-locked, .locked-overlay,
 [class*="game-login"], [class*="game-locked"] {
   display: none !important;
 }
-
-/* Make sure game area is visible */
 #gameArea, #gameSVG, #gameSVG2, .game-content, .game-canvas {
   display: block !important;
   visibility: visible !important;
   opacity: 1 !important;
 }
 </style>
+`;
+
+// JS to fake login state — runs BEFORE the game bundle loads.
+// Sets drupalSettings.uid (non-zero = logged in), validMembership = true,
+// and playOrPractice = 1 (allow play). Also intercepts any login redirect.
+const UNLOCK_JS = `
+<script id="__theta_unlock">
+(function() {
+  "use strict";
+  // Initialize drupalSettings if not present
+  window.drupalSettings = window.drupalSettings || {};
+  // Fake a logged-in user with valid membership
+  window.drupalSettings.uid = 999999;
+  window.drupalSettings.validMembership = true;
+  window.drupalSettings.is_student = false;
+  window.drupalSettings.is_teacher = false;
+  window.drupalSettings.playOrPractice = 1;
+  window.drupalSettings.startGameFromPlayScreen = 1;
+  window.drupalSettings.allowProblemRetry = true;
+
+  // Intercept any attempt to redirect to login page
+  var origAssign = window.location.assign;
+  var origReplace = window.location.replace;
+  function checkRedirect(url) {
+    if (typeof url === 'string' && (url.indexOf('login') >= 0 || url.indexOf('user/login') >= 0 || url.indexOf('signin') >= 0)) {
+      console.log('[clone] Blocked redirect to login:', url);
+      return true;
+    }
+    return false;
+  }
+  // Can't override window.location directly, but we can intercept pushState
+  var origPush = history.pushState;
+  history.pushState = function(state, title, url) {
+    if (checkRedirect(url)) return;
+    return origPush.apply(this, arguments);
+  };
+  var origReplaceState = history.replaceState;
+  history.replaceState = function(state, title, url) {
+    if (checkRedirect(url)) return;
+    return origReplaceState.apply(this, arguments);
+  };
+
+  // Watch for drupalSettings being set later by Drupal's JS and re-apply
+  var ds = window.drupalSettings;
+  Object.defineProperty(window, 'drupalSettings', {
+    get: function() { return ds; },
+    set: function(val) {
+      ds = val || {};
+      ds.uid = 999999;
+      ds.validMembership = true;
+      ds.playOrPractice = 1;
+      ds.startGameFromPlayScreen = 1;
+      ds.allowProblemRetry = true;
+    },
+    configurable: true,
+  });
+})();
+</script>
 `;
 
 export async function middleware(req: NextRequest) {
@@ -82,13 +130,14 @@ export async function middleware(req: NextRequest) {
 
     const contentType = upstream.headers.get("content-type") || "";
 
-    // HTML: inject CSS cleanup (no JS — no infinite loops)
     if (contentType.includes("text/html")) {
       let html = await upstream.text();
-      if (html.includes("</head>")) {
-        html = html.replace("</head>", CLEANUP_CSS + "</head>");
-      } else if (html.includes("</body>")) {
-        html = html.replace("</body>", CLEANUP_CSS + "</body>");
+      // Inject CSS + JS BEFORE the first <script> so drupalSettings is faked
+      // before any Drupal/game JS runs.
+      if (html.includes("<head>")) {
+        html = html.replace("<head>", "<head>" + CLEANUP_CSS + UNLOCK_JS);
+      } else if (html.includes("</head>")) {
+        html = html.replace("</head>", CLEANUP_CSS + UNLOCK_JS + "</head>");
       }
       headers.delete("content-length");
       return new NextResponse(html, {
@@ -98,7 +147,6 @@ export async function middleware(req: NextRequest) {
       });
     }
 
-    // Non-HTML: stream as-is
     return new NextResponse(upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,
