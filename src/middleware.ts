@@ -5,6 +5,7 @@ const UPSTREAM = "https://trainer.thetamusic.com";
 // CSS to hide login wall, paywall, cookie banners (pure CSS, no loops)
 const CLEANUP_CSS = `
 <style id="__theta_cleanup">
+/* Hide ALL login/signup/auth elements — header buttons, sidebar blocks, modals */
 .block-user-login, .block-user, .block-user-menu,
 .login-block, .auth-modal, .user-login-form,
 #block-userlogin, #block-userlogin-2,
@@ -12,23 +13,46 @@ const CLEANUP_CSS = `
 .region-sidebar-second .block-user,
 [class*="login-modal"], [class*="signup-modal"],
 [class*="auth-modal"], [class*="register-form"],
-[id*="login-modal"], [id*="signup-modal"] {
+[id*="login-modal"], [id*="signup-modal"],
+/* Header sign up / log in buttons + container */
+.signup, .signin, .signup-or-login-dialog-link,
+.top_create_account, .top_sign_in,
+.landingpage_signup, .landingpage_login,
+a.signup, a.signin, a.top_create_account, a.top_sign_in,
+button.landingpage_signup, button.landingpage_login,
+.sign_in_sign_up, .go-premium-button-anonymous-user,
+/* Drupal user menu links */
+.menu-item--user, .menu-item--login, .menu-item--signup,
+li.menu-item--user a, li.menu-item--login a, li.menu-item--signup a,
+/* Any link with login/signup/pricing in header nav */
+.nav li a[href*="user/login"], .nav li a[href*="user/register"],
+#superfish-main a[href*="user/login"],
+#superfish-main a[href*="user/register"],
+#superfish-main a[href*="subscription"],
+a[href*="pricing"], a[href*="subscription"],
+.pricing-link, .menu-item--pricing,
+/* "Sign up" / "Log in" in any nav menu */
+.sf-menu li a.signup, .sf-menu li a.signin {
   display: none !important;
 }
+/* Paywall / subscribe / upgrade */
 [class*="paywall"], [class*="subscribe"], [class*="upgrade"],
 [class*="locked-content"], [class*="premium-only"],
 [class*="membership"], [class*="pricing-table"],
 [id*="paywall"], [id*="subscribe"] {
   display: none !important;
 }
+/* Cookie / GDPR */
 [class*="cookie"], [class*="gdpr"], [class*="consent"],
 [class*="privacy-banner"], #cookie-banner, #gdpr-banner {
   display: none !important;
 }
+/* Game login overlays */
 .game-login-overlay, .game-locked, .locked-overlay,
 [class*="game-login"], [class*="game-locked"] {
   display: none !important;
 }
+/* Force game area visible */
 #gameArea, #gameSVG, #gameSVG2, .game-content, .game-canvas {
   display: block !important;
   visibility: visible !important;
